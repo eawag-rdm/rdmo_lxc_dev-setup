@@ -54,13 +54,14 @@ SSH_PUBKEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQChGPTwefwBQecG3FX8fbVkHjnwN5SG
 # nameserver 8.8.8.8
 # EOF
 
-################################################################################
 
 # This script works only with Debian and has been only tested for this
 # release and architecture.
 DISTRIBUTION=debian
 RELEASE=stretch
 ARCH=amd64
+
+################################################################################
 
 ROOTFS="/var/lib/lxc/$CONTAINERNAME/rootfs"
 
