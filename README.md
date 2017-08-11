@@ -33,7 +33,7 @@ lxc.network.link = lxcbr0
 2. Run it.
 
 ## Expected result
-+ You should be able to see RDMO at http://10.0.3.33:8000 in a browser on the host (or another IP if you chode so).
++ You should be able to see RDMO at http://10.0.3.33:8000 in a browser on the host (or another IP if you chose so).
 + You can login as admin with the username and password configured in the script.
 + You can passwordless ssh into the container from the account on the host, which has the ssh-key-pair the public part of which you provided in the script-configuration.
 + You have passwordless sudo in the container.
