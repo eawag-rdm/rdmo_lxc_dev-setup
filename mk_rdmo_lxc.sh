@@ -1,6 +1,9 @@
 #!/bin/bash
 
+set -e
+
 cat <<EOF
+
 HVW-2017-08-10 @ Eawag
 This script creates a privileged LXC container and installs RDMO for development
 inside. It assumes that the executing user has password-less sudo capabilities.
@@ -14,6 +17,10 @@ LXC_BRIDGE="lxcbr0"
 LXC_ADDR="10.0.3.1"
 LXC_NETMASK="255.255.255.0"
 LXC_NETWORK="10.0.3.0/24"
+LXC_DHCP_RANGE="10.0.3.2,10.0.3.254"
+LXC_DHCP_MAX="253"
+LXC_DHCP_CONFILE=""
+LXC_DOMAIN=""
 
 /etc/lxc/default.conf  contains:
 
@@ -41,7 +48,7 @@ DB_PWD=$USER
 
 # Public ssh-key of the developer on the host (better don't use mine :).
 # This is used to enable passwordless login to container
-SSH_PUBKEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQChGPTwefwBQecG3FX8fbVkHjnwN5SGvFgrSZlNMUISvwEJVcEVMZd3IIr137RfpSICioDJfI5xcMnlg+xgoznd2TDDIHQYqlgNnNgiUiobdV6s0KHJQ7JolQvQT8Rqt37hvVS8TDPNUbjKG82BvmtYr2CpM9aWcQD7VaoMIl7r+eaiLNmFiX0Vi7tw+lX12agO87yxj6i8AmQAdfv+NVbxR4DxSu992zVOoRKCkf7pxNkXQTMsoDOJFvmgMJkPBMrJrVXNbJT/N4v4uXlGRo63TQuJUBv1Niwa155VqexEnwzE8wYx3beUQHegJmRFuc6nLqVNU2BOqOs5/C7aRcOuSrWy06Ww/Q8JYoO+5mrWmOPUmg6qMV00iKw6j+u5occPSkFh+ctel0GxHy4hwkItthvo+ix2EqyMv1gvN7zsxhLAbs2O4aHwl/7pEx5R8K0l4Mj+RWjeVdCo5nFxlY/8/7kqu4Kzp69D36sxzokFo7+Eoiw/kNwgL5flzoo2C12iMOWwkfJW72VVdFPypbJbb9pbGmjevOYboYb3CHdqs5aFCaat3cvMSR18aoChd3RgIT3jCWikF1v5Z68wBsto5ePDzwlezHJqQpFYbs3RXRvX3W0aKzjBYEPoE8m2motq+XyxkXBr7bleGh5VhGuI2EjI0jSl3KbzmEuyVa/aPQ== harald.vonwaldow@eawag.ch"
+SSH_PUBKEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDBFTyAK5iF+rtEfnkThhyISsRZaRnVheTVoBS5P0ZEdNyOrIpi5XpT8xFsFYOLu+wI+wzDd9i7IR0FMgcYRN3e3igv4Rt9Ca8GgYsJ/Qtwwfy2mBywm7YLeP48iw20zlvAqx0vLOpS7KUBqxqnOMbETHfXbATCa8KLALlKiX8hyxl3ueobaYb9CNIUVG62jwsu7stqLDlLzz8DQOi9UyuSjLMmcZjefNSMKtFLGKB2OcK+Bg+zZf+LlAOFE6cg9QCwbyBObGVwkD7Ht+abCHBdbUpVgmW/3FhTc33nK+3fVcyfK//2op57SZlRXXr3Vr8W//FN3jv76GDeBMnUzE/z hvwaldow@l1"
 
 # Per default we assume that /etc/resolv.conf of the container
 # should be the same as the one of the host. If that is not the case
@@ -65,18 +72,29 @@ ARCH=amd64
 
 ROOTFS="/var/lib/lxc/$CONTAINERNAME/rootfs"
 
+logdo() {
+    echo -e "\n----------------------------------------------------------------------"
+    echo -e $1
+    echo -e "----------------------------------------------------------------------\n"
+}
+
 create_container() {
+    logdo "Creating container:\n\tName: $CONTAINERNAME\n\tDistribution: $DISTRIBUTION\n\tRelease: $RELEASE\n\tArch: $ARCH"
     sudo lxc-create -n $CONTAINERNAME -t download -- --dist $DISTRIBUTION\
-	 --release $RELEASE --arch $ARCH
+    	 --release $RELEASE --arch $ARCH
+    logdo "Container rdmo created."
 }
 
 network_setup() {
+    logdo "Configuring container networking"
+    echo -e "\t configuring /var/lib/lxc/$CONTAINERNAME/config"
     sudo sh -c "echo \"lxc.network.ipv4 = ${CONTAINER_IP}/24\" \
      >> /var/lib/lxc/$CONTAINERNAME/config"
     sudo sh -c "echo \"lxc.network.ipv4.gateway = auto\" \
      >> /var/lib/lxc/$CONTAINERNAME/config"
 
     # Replace "dhcp" in default /etc/network/interfaces with "manual"
+    echo -e "\t writing >$ROOTFS/etc/network/interfaces"
     interfaces=$(cat <<EOF
 auto lo
 iface lo inet loopback
@@ -86,20 +104,23 @@ iface eth0 inet manual
 EOF
 )
     sudo sh -c "echo \"$interfaces\" >$ROOTFS/etc/network/interfaces"
-
+    echo -e "\t configuring $ROOTFS/etc/hosts"
     # add $CONTAINERNAME to 127.0.0.1 in /etc/hosts
     sudo sed  -i '/127.0.0.1[ \t]\{1,\}localhost/ s/$/ '"$CONTAINERNAME"'/'\
 	 $ROOTFS/etc/hosts
 
+    echo -e "\t configuring $ROOTFS/etc/resolv.conf"
     if [ -z $RESOV_CONF ]
     then
 	sudo cp /etc/resolv.conf $ROOTFS/etc/resolv.conf
     else
 	sudo sh -c "echo \"$RESOLV_CONF\" >$ROOTFS/etc/resolv.conf"
     fi
+    logdo "Container networking configured"
 }
 
 install_packages() {
+    logdo "Installing base packages."
     base_packages_install=$(cat <<EOF
 #!/bin/bash
 apt-get update
@@ -123,9 +144,11 @@ EOF
     sudo lxc-attach -n $CONTAINERNAME -- /root/base_packages.sh
     sudo lxc-attach -n $CONTAINERNAME -- /root/dev_packages.sh
     sudo lxc-stop -n $CONTAINERNAME
+    logdo "Base packages installed."
 }
 
 create_user() {
+    logdo "Creating user $USER."
     setup_user=$(cat <<EOF
 mkdir \$HOME/.ssh
 chmod 700 \$HOME/.ssh
@@ -138,18 +161,21 @@ EOF
     sudo lxc-attach -n $CONTAINERNAME -- usermod -aG sudo $USER
     sudo lxc-attach -n $CONTAINERNAME -- su - -c "$setup_user" $USER
     sudo lxc-stop -n $CONTAINERNAME
-
+    logdo "User $USER created."
 }
 
 setup_sudo() {
+    logdo "Setup sudo."
     sudo chmod 640 $ROOTFS/etc/sudoers
     sudo sed -i \
 	 's/%sudo[\t ]\{1,\}ALL=(ALL:ALL) ALL/%sudo   ALL=(ALL:ALL) NOPASSWD: ALL/' \
     $ROOTFS/etc/sudoers
     sudo chmod 440 $ROOTFS/etc/sudoers
+    logdo "sudo is set up."
 }
 
 setup_rdmo() {
+    logdo "Install RDMO requirements."
     setup_rdmo=$(cat <<EOF
 git clone https://github.com/rdmorganiser/rdmo.git
 cd rdmo
@@ -174,9 +200,11 @@ EOF
     sudo lxc-attach -n $CONTAINERNAME -- \
     	 su - -c /home/$USER/setup_rdmo.sh  $USER
     sudo lxc-stop -n $CONTAINERNAME
+    logdo "RDMO requirements installed."
 }
 
 init_rdmo() {
+    logdo "Initializing RDMO."
     initcmd=$(cat <<EOF
 cd /home/$USER/rdmo; \
 ./env/bin/python3 manage.py migrate; \
@@ -188,10 +216,11 @@ EOF
     sudo lxc-attach -n $CONTAINERNAME -- \
 	 su - -c  "$initcmd" $USER
     sudo lxc-stop -n $CONTAINERNAME
-
+    logdo "RDMO initialized."
 }
 
 run_server() {
+    logdo "Running development server at $CONTAINER_IP:8000"
     rdmobase="/home/$USER/rdmo"
     sudo lxc-start -n $CONTAINERNAME
     sudo lxc-attach -n $CONTAINERNAME -- \
