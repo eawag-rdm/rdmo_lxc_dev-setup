@@ -33,15 +33,20 @@ EOF
 
 # Adapt any settings in this section, if necessary #############################
 
+# Which app to install.
+APP="CKAN"
+#APP="RDMO"
+
 # Arbitrary name for container
-CONTAINERNAME=rdmo
+CONTAINERNAME=ckan
+#CONTAINERNAME=rdmo
 
 # Has to be in 10.0.3.0/24
 CONTAINER_IP=10.0.3.33
 
 # Username in the container (developer)
-USER=hvw
-USER_EMAIL=harald.vonwaldow@eawag.ch
+USER=hvwaldow
+USER_EMAIL=harald@vonwaldow.ch
 # initial superuser password for the app. You might want to change that
 # even for the development installation.
 DB_PWD=$USER
@@ -67,6 +72,23 @@ SSH_PUBKEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDBFTyAK5iF+rtEfnkThhyISsRZaRnV
 DISTRIBUTION=debian
 RELEASE=stretch
 ARCH=amd64
+
+################################################################################
+
+# Basic software
+PACKAGES="openssh-server vim sudo curl git"
+
+# Application specific settings
+if [[ "$APP" == "CKAN" ]]; then
+    PACKAGES_DEV="python-dev postgresql libpq-dev python-pip python-virtualenv"
+    CKAN_VERSION="@ckan-2.6.3"
+
+elif [[ "$APP" == "RDMO" ]]; then
+    PACKAGES_DEV="build-essential libxml2-dev libxslt-dev zlib1g-dev python3-dev python3-pip python3-venv pandoc"
+else
+    echo "\"$APP\" is not a supported application."
+    exit 1
+fi
 
 ################################################################################
 
@@ -119,20 +141,48 @@ EOF
     logdo "Container networking configured"
 }
 
+create_user() {
+    logdo "Creating user $USER."
+    setup_user=$(cat <<EOF
+mkdir \$HOME/.ssh
+chmod 700 \$HOME/.ssh
+echo $SSH_PUBKEY >\$HOME/.ssh/authorized_keys
+chmod 600 \$HOME/.ssh/authorized_keys
+EOF
+	      )
+    sudo lxc-start -n $CONTAINERNAME
+    sudo lxc-attach -n $CONTAINERNAME -- useradd -m -s /bin/bash $USER
+    sudo lxc-attach -n $CONTAINERNAME -- usermod -aG sudo $USER
+    sudo lxc-attach -n $CONTAINERNAME -- su - -c "$setup_user" $USER
+    # Remove host-key from known_hosts; necessary for destroy-create cycles
+    ssh-keygen -f "$HOME/.ssh/known_hosts" -R $CONTAINER_IP
+    sudo lxc-stop -n $CONTAINERNAME
+    logdo "User $USER created."
+}
+
+setup_sudo() {
+    logdo "Setup sudo."
+    sudo chmod 640 $ROOTFS/etc/sudoers
+    sudo sed -i \
+	 's/%sudo[\t ]\{1,\}ALL=(ALL:ALL) ALL/%sudo   ALL=(ALL:ALL) NOPASSWD: ALL/' \
+    $ROOTFS/etc/sudoers
+    sudo chmod 440 $ROOTFS/etc/sudoers
+    logdo "sudo is set up."
+}
+
 install_packages() {
     logdo "Installing base packages."
     base_packages_install=$(cat <<EOF
 #!/bin/bash
 apt-get update
 apt-get dist-upgrade -y
-apt-get install openssh-server vim sudo curl git -y
+apt-get install $PACKAGES -y
 EOF
 )
 
     dev_packages_install=$( cat <<EOF
 #!/bin/bash
-apt-get install build-essential libxml2-dev libxslt-dev zlib1g-dev -y
-apt-get install python3-dev python3-pip python3-venv git pandoc -y
+apt-get install $PACKAGES_DEV -y
 EOF
 )
     sudo sh -c "echo  \"$base_packages_install\" >$ROOTFS/root/base_packages.sh"
@@ -147,31 +197,23 @@ EOF
     logdo "Base packages installed."
 }
 
-create_user() {
-    logdo "Creating user $USER."
-    setup_user=$(cat <<EOF
-mkdir \$HOME/.ssh
-chmod 700 \$HOME/.ssh
-echo $SSH_PUBKEY >\$HOME/.ssh/authorized_keys
-chmod 600 \$HOME/.ssh/authorized_keys
-EOF
-	      )
+setup_ckan() {
+    logdo "Install CKAN dev-environment"
     sudo lxc-start -n $CONTAINERNAME
-    sudo lxc-attach -n $CONTAINERNAME -- useradd -m -s /bin/bash $USER
-    sudo lxc-attach -n $CONTAINERNAME -- usermod -aG sudo $USER
-    sudo lxc-attach -n $CONTAINERNAME -- su - -c "$setup_user" $USER
+    ssh $USER@$CONTAINER_IP \
+        "mkdir -p ~/ckan/lib;
+         sudo ln -s ~/ckan/lib /usr/lib/ckan;
+         mkdir -p ~/ckan/etc;
+         sudo ln -s ~/ckan/etc /etc/ckan;
+         sudo mkdir -p /usr/lib/ckan/default;
+         sudo chown `whoami` /usr/lib/ckan/default;
+         virtualenv /usr/lib/ckan/default;"
+    VENVPY="/usr/lib/ckan/default/bin/python"
+    VENVPIP="/usr/lib/ckan/default/bin/pip"
+    ssh $USER@$CONTAINER_IP $VENVPIP "install -e 'git+https://github.com/ckan/ckan.git${CKAN_VERSION}#egg=ckan'"
+    ssh $USER@$CONTAINER_IP $VENVPIP "install -r /usr/lib/ckan/default/src/ckan/requirements.txt"
     sudo lxc-stop -n $CONTAINERNAME
-    logdo "User $USER created."
-}
-
-setup_sudo() {
-    logdo "Setup sudo."
-    sudo chmod 640 $ROOTFS/etc/sudoers
-    sudo sed -i \
-	 's/%sudo[\t ]\{1,\}ALL=(ALL:ALL) ALL/%sudo   ALL=(ALL:ALL) NOPASSWD: ALL/' \
-    $ROOTFS/etc/sudoers
-    sudo chmod 440 $ROOTFS/etc/sudoers
-    logdo "sudo is set up."
+    logdo "Done installing CKAN dev-environment"
 }
 
 setup_rdmo() {
@@ -227,11 +269,15 @@ run_server() {
 	 su - -c "$rdmobase/env/bin/python3 $rdmobase/manage.py runserver 0.0.0.0:8000" $USER
 }
 
-create_container
-network_setup
-install_packages
-create_user
-setup_sudo
-setup_rdmo
-init_rdmo		 
-run_server
+# create_container
+# network_setup
+# create_user
+# install_packages
+# setup_sudo
+# setup_ckan
+
+# next: postgresql
+
+# setup_rdmo
+# init_rdmo		 
+# run_server
